@@ -45,6 +45,7 @@ Panel {
   property string vaultFilter: ""
   property var editing: null // entry being edited; {} for a new one
   property bool deleteArmed: false
+  property bool lockedDelete: false // locked screen: delete-vault confirm shown
   property bool rekeying: false // settings view: username presets + master password
   property bool showPass: false
   property string pwMode: "random" // entry form: random | own
@@ -182,6 +183,8 @@ Panel {
   // "__new__" opens the create form; any other value locks and switches
   function switchVault(name) {
     lockVault()
+    lockedDelete = false
+    lockedDeleteField.text = ""
     if (name === "__new__") {
       vaultState = "missing"
     } else {
@@ -199,10 +202,15 @@ Panel {
     Qt.callLater(focusMode)
   }
 
+  // From settings (unlocked) or from the locked screen (no password needed)
   function deleteVault() {
-    vaultCall({ op: "delete", key: vaultKey, confirm: deleteField.text }, function() {
+    var req = { op: "delete", confirm: vaultState === "unlocked" ? deleteField.text : lockedDeleteField.text }
+    if (vaultState === "unlocked") req.key = vaultKey
+    vaultCall(req, function() {
       var gone = vaultName
       lockVault()
+      lockedDelete = false
+      lockedDeleteField.text = ""
       vaultName = ""
       copiedLabel = "vault " + gone + " deleted"
       vaultStatus()
@@ -1051,6 +1059,51 @@ Panel {
               visible: vaultColumn.isMissing && root.vaultName !== ""
               text: "Cancel"
               onClicked: root.cancelCreate()
+            }
+            VaultButton {
+              visible: vaultColumn.isLocked
+              text: root.lockedDelete ? "Keep vault" : "Delete vault…"
+              iconText: String.fromCodePoint(0xF0A7A) // nf-md-trash_can_outline
+              foreground: root.lockedDelete ? root.bar.foreground : Color.urgent
+              onClicked: {
+                root.lockedDelete = !root.lockedDelete
+                lockedDeleteField.text = ""
+                if (root.lockedDelete) lockedDeleteField.forceActiveFocus()
+                else masterField.forceActiveFocus()
+              }
+            }
+          }
+
+          // Delete a locked vault, e.g. when its password is forgotten
+          Column {
+            visible: vaultColumn.isLocked && root.lockedDelete
+            width: parent.width
+            spacing: Style.space(6)
+            Text {
+              width: parent.width
+              wrapMode: Text.Wrap
+              text: "Delete vault \"" + root.vaultName + "\" without unlocking it. All its logins are gone for good."
+              color: Color.urgent
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+            Row {
+              id: lockedDeleteRow
+              spacing: Style.space(6)
+              VaultField {
+                id: lockedDeleteField
+                width: vaultColumn.width - lockedDeleteButton.width - lockedDeleteRow.spacing
+                placeholderText: "Type " + root.vaultName + " to confirm"
+                onSubmit: if (text === root.vaultName) root.deleteVault()
+              }
+              VaultButton {
+                id: lockedDeleteButton
+                text: "Delete"
+                foreground: Color.urgent
+                bordered: true
+                enabled: !vaultProc.running && lockedDeleteField.text === root.vaultName
+                onClicked: root.deleteVault()
+              }
             }
           }
 

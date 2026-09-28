@@ -10,7 +10,8 @@ each vault is its own file, <name>.enc, with its own master password.
 
 Requests:
   {"op": "status"}                          -> {"vaults": [names]}
-  {"op": "delete", "key": hex, "confirm": name} -> {"ok": true}
+  {"op": "delete", "key": hex?, "confirm": name} -> {"ok": true}
+      (without key it deletes a locked vault, e.g. a forgotten password)
   {"op": "create", "password": str}         -> {"key": hex, "entries": [], "usernames": [], "emails": []}
   {"op": "unlock", "password": str}         -> {"key": hex, "entries", "usernames", "emails"}
   {"op": "save", "key": hex, "entries": [], "usernames": [], "emails": []} -> {"ok": true}
@@ -190,7 +191,10 @@ def handle(req):
 
     if op == "delete":
         header = read_header()
-        decrypt(header, key_from(req))  # only whoever can open it may delete it
+        if "key" in req:
+            decrypt(header, key_from(req))  # an open vault: make sure it's this one
+        # A locked vault can be deleted without its password: anyone who can
+        # run this could rm the file anyway, and it's useless if forgotten.
         if req.get("confirm") != name:
             raise VaultError("Type the vault name to confirm")
         for path in (VAULT, VAULT + ".bak"):
