@@ -266,7 +266,7 @@ Panel {
     titleField.text = e.title || ""
     userPick.text = e.id ? (e.username || "") : (usernames[0] || "")
     emailPick.text = e.id ? (e.email || "") : (emails[0] || "")
-    var fill = e.id ? fillOf(e) : defaultFill(userPick.text !== "", emailPick.text !== "")
+    var fill = e.id ? fillOf(e) : { signup: padSlots([]), signin: padSlots([]) }
     fillSignup = fill.signup
     fillSignin = fill.signin
     fillTarget = e.id ? "signin" : "signup"
@@ -336,16 +336,6 @@ Panel {
     return out
   }
 
-  function defaultFill(hasUser, hasEmail) {
-    var signup = [], signin = []
-    if (hasUser) signup.push("username")
-    if (hasEmail) signup.push("email")
-    signin.push(hasUser || !hasEmail ? "username" : "email")
-    signup.push("password")
-    signin.push("password")
-    return { signup: padSlots(signup), signin: padSlots(signin) }
-  }
-
   // A login's fill orders; v1.1 logins had checkboxes (use), v1.0 loginWith
   function fillOf(e) {
     if (e.fill) return { signup: padSlots(e.fill.signup || []), signin: padSlots(e.fill.signin || []) }
@@ -362,6 +352,19 @@ Panel {
     list[i] = element
     if (kind === "signup") fillSignup = list
     else fillSignin = list
+  }
+
+  // Clicking a Username/Email/Password chip appends it to the active order
+  function appendSlot(element) {
+    var list = fillTarget === "signup" ? fillSignup : fillSignin
+    var i = list.indexOf("")
+    if (i === -1) { error = "That order is full: click a slot to remove it first"; return }
+    setSlot(fillTarget, i, element)
+  }
+
+  function clearSlots(kind) {
+    if (kind === "signup") fillSignup = padSlots([])
+    else fillSignin = padSlots([])
   }
 
   // Hover a Username/Email/Password chip and press 1-6 to put it in that
@@ -389,7 +392,7 @@ Panel {
     if (autotypeProc.running) return
     if (targetWindow === "") { error = "No window to type into: focus the first field on the page, then open the vault"; return }
     var seq = fillOf(e)[kind].filter(Boolean).map(function(el) { return e[el] || "" })
-    if (seq.length === 0) { error = "The " + (kind === "signup" ? "sign-up" : "sign-in") + " order is empty"; return }
+    if (seq.length === 0) { error = "The " + (kind === "signup" ? "sign-up" : "sign-in") + " order is empty: edit the login (pencil) to set it"; return }
     autotypeProc.payload = JSON.stringify({ seq: seq, win: targetWindow })
     close()
     autotypeProc.running = true
@@ -422,14 +425,18 @@ Panel {
         if (slots[i] !== "" && e[slots[i]] === "") { error = kinds[k][1] + " slot " + (i + 1) + " uses " + names[slots[i]] + ", which is empty"; return }
       }
     }
-    if (e.fill.signin.filter(Boolean).length === 0) { error = "The sign-in order is empty"; return }
+    var typeKind = isNew ? "signup" : "signin"
+    if (andSignIn && e.fill[typeKind].filter(Boolean).length === 0) {
+      error = "Set the " + (isNew ? "sign-up" : "sign-in") + " order first: click the fields in the order the page asks for them"
+      return
+    }
     var list = entries.filter(function(x) { return x.id !== e.id })
     list.push(e)
     list.sort(function(a, b) { return a.title.localeCompare(b.title) })
     // A username/email typed on the fly becomes a preset; using one makes it the default
     saveVault(list, withPreset(usernames, e.username, true), withPreset(emails, e.email, true), function() {
       closeEdit()
-      if (andSignIn) autoType(e, isNew ? "signup" : "signin")
+      if (andSignIn) autoType(e, typeKind)
     })
   }
 
@@ -662,15 +669,21 @@ Panel {
     border.color: hot ? Color.accent : root.dim
     HoverHandler {
       id: chipHover
+      cursorShape: Qt.PointingHandCursor
       onHoveredChanged: {
         if (hovered) root.hoveredElement = chip.element
         else if (root.hoveredElement === chip.element) root.hoveredElement = ""
       }
     }
+    TapHandler { onTapped: root.appendSlot(chip.element) }
+    PanelToolTip {
+      visible: chip.hot
+      text: "Click to add " + chip.label + " to the " + (root.fillTarget === "signup" ? "sign-up" : "sign-in") + " order (or press 1-" + root.slotCount + " for a specific slot)"
+    }
     Text {
       id: chipText
       anchors.centerIn: parent
-      text: chip.hot ? "press 1-" + root.slotCount : chip.label
+      text: chip.hot ? "+ " + chip.label : chip.label
       color: chip.hot ? Color.accent : root.bar.foreground
       font.family: root.bar.fontFamily
       font.pixelSize: Style.font.bodySmall
@@ -695,7 +708,17 @@ Panel {
       font.family: root.bar.fontFamily
       font.pixelSize: Style.font.bodySmall
       font.bold: fillRow.active
-      MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.fillTarget = fillRow.kind }
+      MouseArea {
+        id: labelMouse
+        anchors.fill: parent
+        hoverEnabled: true
+        cursorShape: Qt.PointingHandCursor
+        onClicked: root.fillTarget = fillRow.kind
+      }
+      PanelToolTip {
+        visible: labelMouse.containsMouse
+        text: fillRow.kind === "signup" ? "Typed by the sign-up button, for registration forms. Click to edit this order." : "Typed by the sign-in button and by Enter in search. Click to edit this order."
+      }
     }
     Repeater {
       model: root.slotCount
@@ -703,13 +726,21 @@ Panel {
         id: slot
         required property int index
         readonly property string element: fillRow.slots[index] || ""
-        width: (fillRow.width - fillLabel.width - root.slotCount * fillRow.spacing) / root.slotCount
-        height: slotText.implicitHeight + Style.space(8)
+        // the slot the next click on a field fills
+        readonly property bool next: fillRow.active && index === fillRow.slots.indexOf("")
+        width: (fillRow.width - fillLabel.width - clearButton.width - (root.slotCount + 1) * fillRow.spacing) / root.slotCount
+        height: slotText.implicitHeight + Style.space(10)
+        anchors.verticalCenter: parent ? parent.verticalCenter : undefined
         radius: Style.cornerRadius
         color: slotHover.hovered ? Style.hoverFillFor(root.bar.foreground, Color.accent) : "transparent"
-        border.width: 1
+        border.width: next ? 2 : 1
         border.color: fillRow.active ? Color.accent : root.dim
-        opacity: element === "" ? 0.6 : 1
+        opacity: element === "" && !next ? 0.55 : 1
+        Behavior on opacity { NumberAnimation { duration: 120 } }
+        PanelToolTip {
+          visible: slotHover.hovered
+          text: slot.element !== "" ? "Click to remove" : (slot.next ? "Next: click Username, Email or Password to fill it" : "Empty")
+        }
         HoverHandler {
           id: slotHover
           onHoveredChanged: {
@@ -720,8 +751,9 @@ Panel {
         Text {
           id: slotText
           anchors.centerIn: parent
-          text: (slot.index + 1) + (slot.element === "" ? "" : " " + { username: "User", email: "Mail", password: "Pass" }[slot.element])
+          text: slot.element === "" ? String(slot.index + 1) : { username: "User", email: "Mail", password: "Pass" }[slot.element]
           color: slot.element === "" ? root.dim : root.bar.foreground
+          font.bold: slot.element !== ""
           font.family: root.bar.fontFamily
           font.pixelSize: Style.font.bodySmall
         }
@@ -730,11 +762,19 @@ Panel {
           anchors.fill: parent
           cursorShape: Qt.PointingHandCursor
           onClicked: {
-            if (fillRow.active && slot.element !== "") root.setSlot(fillRow.kind, slot.index, "")
+            if (slot.element !== "") root.setSlot(fillRow.kind, slot.index, "")
             root.fillTarget = fillRow.kind
           }
         }
       }
+    }
+    VaultButton {
+      id: clearButton
+      anchors.verticalCenter: parent.verticalCenter
+      iconText: String.fromCodePoint(0xF0156) // nf-md-close
+      tooltipText: "Clear this order"
+      enabled: fillRow.slots.some(Boolean)
+      onClicked: { root.clearSlots(fillRow.kind); root.fillTarget = fillRow.kind }
     }
   }
 
@@ -1124,6 +1164,7 @@ Panel {
               id: newButton
               text: "Sign up"
               iconText: String.fromCodePoint(0xF0415) // nf-md-plus
+              tooltipText: "New login: pick username, email and password, then set the typing order"
               bordered: true
               onClicked: root.startEdit({})
             }
@@ -1168,7 +1209,7 @@ Panel {
                 required property var modelData
 
                 width: parent ? parent.width : 0
-                height: entryText.implicitHeight + Style.space(10)
+                height: Math.max(entryText.implicitHeight, entryActions.implicitHeight) + Style.space(10)
                 radius: Style.cornerRadius
                 color: entryHover.hovered ? Style.hoverFillFor(root.bar.foreground, Color.accent) : "transparent"
 
@@ -1218,39 +1259,35 @@ Panel {
                   anchors.right: parent.right
                   anchors.rightMargin: Style.space(8)
                   anchors.verticalCenter: parent.verticalCenter
-                  spacing: Style.space(10)
-                  opacity: entryHover.hovered ? 1 : 0.35
+                  spacing: Style.space(3)
 
                   Repeater {
                     // nf-md-account_plus / nf-md-login / nf-md-account / nf-md-email / nf-md-key / nf-md-pencil
                     model: [
-                      { icon: 0xF0014, action: "signup" },
-                      { icon: 0xF0342, action: "signin" },
-                      { icon: 0xF0004, action: "username" },
-                      { icon: 0xF01EE, action: "email" },
-                      { icon: 0xF0306, action: "password" },
-                      { icon: 0xF03EB, action: "edit" }
+                      { icon: 0xF0014, action: "signup", tip: "Sign up: types the sign-up order into the page you came from" },
+                      { icon: 0xF0342, action: "signin", tip: "Sign in: types the sign-in order, then Enter" },
+                      { icon: 0xF0004, action: "username", tip: "Copy username" },
+                      { icon: 0xF01EE, action: "email", tip: "Copy email" },
+                      { icon: 0xF0306, action: "password", tip: "Copy password (wiped from the clipboard after 30 s)" },
+                      { icon: 0xF03EB, action: "edit", tip: "Edit this login and its typing orders" }
                     ]
 
-                    delegate: Text {
+                    delegate: VaultButton {
                       required property var modelData
                       readonly property string copyLabel: entryRow.modelData.title + " " + modelData.action
-                      visible: modelData.action === "edit" || modelData.action === "signin" || modelData.action === "signup" || !!entryRow.modelData[modelData.action]
-                      text: root.copiedLabel === copyLabel ? String.fromCodePoint(0xF012C) : String.fromCodePoint(modelData.icon)
-                      color: root.copiedLabel === copyLabel ? Color.accent : root.bar.foreground
-                      font.family: root.bar.fontFamily
-                      font.pixelSize: Style.font.body
-
-                      MouseArea {
-                        anchors.fill: parent
-                        anchors.margins: -Style.space(3)
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                          var a = parent.modelData.action
-                          if (a === "edit") root.startEdit(entryRow.modelData)
-                          else if (a === "signin" || a === "signup") root.autoType(entryRow.modelData, a)
-                          else root.copyEntry(entryRow.modelData, a)
-                        }
+                      readonly property bool copied: root.copiedLabel === copyLabel
+                      readonly property bool typing: modelData.action === "signin" || modelData.action === "signup"
+                      visible: modelData.action === "edit" || typing || !!entryRow.modelData[modelData.action]
+                      iconText: String.fromCodePoint(copied ? 0xF012C : modelData.icon)
+                      iconSize: Style.font.icon * 1.2
+                      bordered: typing
+                      selected: copied
+                      tooltipText: modelData.tip
+                      onClicked: {
+                        var a = modelData.action
+                        if (a === "edit") root.startEdit(entryRow.modelData)
+                        else if (typing) root.autoType(entryRow.modelData, a)
+                        else root.copyEntry(entryRow.modelData, a)
                       }
                     }
                   }
@@ -1327,7 +1364,7 @@ Panel {
               topPadding: Style.space(4)
               width: parent.width
               wrapMode: Text.Wrap
-              text: "Typing order: hover Username, Email or Password and press 1-" + root.slotCount + " to place it in the highlighted row. Click a filled slot or hover it and press 0 to clear."
+              text: "Typing order: click Username, Email or Password in the order the page asks for them. They go into the highlighted row, Tab between each, Enter at the end."
               color: root.dim
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.bodySmall
@@ -1340,14 +1377,16 @@ Panel {
               spacing: Style.space(6)
               VaultButton {
                 text: root.editing && root.editing.id ? "Save & sign in" : "Save & sign up"
+                tooltipText: "Save, close the panel and type the " + (root.editing && root.editing.id ? "sign-in" : "sign-up") + " order into the page"
                 iconText: String.fromCodePoint(root.editing && root.editing.id ? 0xF0342 : 0xF0014) // nf-md-login / account_plus
                 bordered: true
                 onClicked: root.commitEdit(true)
               }
-              VaultButton { text: "Save"; bordered: true; onClicked: root.commitEdit(false) }
-              VaultButton { text: "Cancel"; onClicked: root.closeEdit() }
+              VaultButton { text: "Save"; bordered: true; tooltipText: "Save without typing anything"; onClicked: root.commitEdit(false) }
+              VaultButton { text: "Cancel"; tooltipText: "Discard changes (Esc)"; onClicked: root.closeEdit() }
               VaultButton {
                 visible: !!(root.editing && root.editing.id)
+                tooltipText: "Delete this login (click twice)"
                 text: root.deleteArmed ? "Click again to delete" : "Delete"
                 foreground: Color.urgent
                 onClicked: root.deleteEditing()
