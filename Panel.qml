@@ -46,7 +46,6 @@ Panel {
   property string vaultFilter: ""
   property var editing: null // entry being edited; {} for a new one
   property bool deleteArmed: false
-  property real vaultReveal: 0 // drawer height factor: 0 shut, 1 open
   property bool lockedDelete: false // locked screen: delete-vault confirm shown
   property bool rekeying: false // settings view: username presets + master password
   property bool showPass: false
@@ -229,9 +228,8 @@ Panel {
     vaultNameField.text = ""
     vaultState = "unlocked"
     autoLock.restart()
-    revealShut.stop()
-    vaultReveal = 0
-    revealOpen.restart()
+    drawerOut.stop()
+    drawerIn.restart()
     Qt.callLater(focusMode)
   }
 
@@ -252,9 +250,10 @@ Panel {
 
   function lockVault() {
     autoLock.stop()
-    revealOpen.stop()
-    revealShut.stop()
-    vaultReveal = 0
+    drawerIn.stop()
+    drawerOut.stop()
+    drawer.opacity = 1
+    drawerShift.y = 0
     vaultKey = ""
     entries = []
     usernames = []
@@ -504,31 +503,43 @@ Panel {
     onTriggered: root.error = ""
   }
 
-  // Open/shut the logins drawer
-  NumberAnimation {
-    id: revealOpen
-    target: root
-    property: "vaultReveal"
-    to: 1
-    duration: 380
-    easing.type: Easing.OutCubic
+  // ---- Vault motion. The card's height glides (Behavior on the panel's
+  // contentHeight); the content never resizes per frame, it only fades
+  // and slides, so every frame is cheap.
+
+  // Logins drawer comes in: fade + small drop, a beat after the card starts growing
+  ParallelAnimation {
+    id: drawerIn
+    NumberAnimation { target: drawer; property: "opacity"; from: 0; to: 1; duration: 320; easing.type: Easing.OutCubic }
+    NumberAnimation { target: drawerShift; property: "y"; from: -Style.space(14); to: 0; duration: 380; easing.type: Easing.OutCubic }
   }
 
-  NumberAnimation {
-    id: revealShut
-    target: root
-    property: "vaultReveal"
-    to: 0
-    duration: 300
-    easing.type: Easing.InCubic
+  // Logins drawer goes out, then the vault locks and the card glides shut
+  ParallelAnimation {
+    id: drawerOut
+    NumberAnimation { target: drawer; property: "opacity"; to: 0; duration: 170; easing.type: Easing.InQuad }
+    NumberAnimation { target: drawerShift; property: "y"; to: -Style.space(10); duration: 170; easing.type: Easing.InQuad }
     onFinished: root.lockVault()
   }
 
-  // Slide the drawer shut, then lock; straight away if nobody's watching
+  // Whatever the vault shows after a state change fades in
+  NumberAnimation {
+    id: vaultFadeIn
+    target: vaultColumn
+    property: "opacity"
+    from: 0
+    to: 1
+    duration: 240
+    easing.type: Easing.OutCubic
+  }
+
+  onVaultStateChanged: if (root.opened) vaultFadeIn.restart()
+
+  // Fade the logins out, then lock; straight away if nobody's watching
   function requestLock() {
-    if (revealShut.running) return
-    revealOpen.stop()
-    if (root.opened && vaultState === "unlocked" && !editing && !rekeying) revealShut.start()
+    if (drawerOut.running) return
+    drawerIn.stop()
+    if (root.opened && vaultState === "unlocked" && !editing && !rekeying) drawerOut.start()
     else lockVault()
   }
 
@@ -961,6 +972,12 @@ Panel {
     contentWidth: panel.fittedContentWidth(Style.space(440))
     contentHeight: panel.fittedContentHeight(column.implicitHeight)
 
+    // Every size change glides instead of snapping
+    Behavior on contentHeight {
+      enabled: root.opened
+      NumberAnimation { duration: 440; easing.type: Easing.OutCubic }
+    }
+
     Item {
       id: keyCatcher
       focus: true
@@ -1216,13 +1233,13 @@ Panel {
             }
           }
 
-          // Drawer: the logins slide open on unlock and shut on lock
+          // Drawer: the logins fade/slide in on unlock and out on lock
           Item {
             id: drawer
             visible: vaultColumn.listing
             width: parent.width
-            height: Math.round(drawerColumn.implicitHeight * root.vaultReveal)
-            clip: true
+            height: drawerColumn.implicitHeight
+            transform: Translate { id: drawerShift }
 
             Column {
               id: drawerColumn
