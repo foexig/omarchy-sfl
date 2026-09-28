@@ -102,7 +102,6 @@ Panel {
   onOpenedChanged: if (!opened) {
     masterField.text = ""
     confirmField.text = ""
-    sudoField.text = ""
   }
 
   function toggle() {
@@ -186,7 +185,6 @@ Panel {
     lockVault()
     lockedDelete = false
     lockedDeleteField.text = ""
-    sudoField.text = ""
     if (name === "__new__") {
       vaultState = "missing"
     } else {
@@ -208,8 +206,6 @@ Panel {
   function deleteVault() {
     var req = { op: "delete", confirm: vaultState === "unlocked" ? deleteField.text : lockedDeleteField.text }
     if (vaultState === "unlocked") req.key = vaultKey
-    else req.sudo = sudoField.text
-    sudoField.text = ""
     vaultCall(req, function() {
       var gone = vaultName
       lockVault()
@@ -1072,15 +1068,13 @@ Panel {
               onClicked: {
                 root.lockedDelete = !root.lockedDelete
                 lockedDeleteField.text = ""
-                sudoField.text = ""
                 if (root.lockedDelete) lockedDeleteField.forceActiveFocus()
                 else masterField.forceActiveFocus()
               }
             }
           }
 
-          // Delete a locked vault, e.g. when its password is forgotten;
-          // vault.py checks the sudo password
+          // Delete a locked vault, e.g. when its password is forgotten
           Column {
             visible: vaultColumn.isLocked && root.lockedDelete
             width: parent.width
@@ -1088,7 +1082,7 @@ Panel {
             Text {
               width: parent.width
               wrapMode: Text.Wrap
-              text: "Delete vault \"" + root.vaultName + "\" without unlocking it. All its logins are gone for good. Needs your sudo password."
+              text: "Delete vault \"" + root.vaultName + "\" without unlocking it. All its logins are gone for good."
               color: Color.urgent
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.bodySmall
@@ -1100,22 +1094,16 @@ Panel {
                 id: lockedDeleteField
                 width: vaultColumn.width - lockedDeleteButton.width - lockedDeleteRow.spacing
                 placeholderText: "Type " + root.vaultName + " to confirm"
-                onSubmit: sudoField.forceActiveFocus()
+                onSubmit: if (text === root.vaultName) root.deleteVault()
               }
               VaultButton {
                 id: lockedDeleteButton
                 text: "Delete"
                 foreground: Color.urgent
                 bordered: true
-                enabled: !vaultProc.running && lockedDeleteField.text === root.vaultName && sudoField.text !== ""
+                enabled: !vaultProc.running && lockedDeleteField.text === root.vaultName
                 onClicked: root.deleteVault()
               }
-            }
-            VaultField {
-              id: sudoField
-              password: true
-              placeholderText: "sudo password (Enter deletes)"
-              onSubmit: if (lockedDeleteField.text === root.vaultName && text !== "") root.deleteVault()
             }
           }
 
