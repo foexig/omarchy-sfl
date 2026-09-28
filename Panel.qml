@@ -16,14 +16,14 @@ Panel {
 
   readonly property string script: Qt.resolvedUrl("crypto.sh").toString().replace(/^file:\/\//, "")
   readonly property var modes: [
+    { value: "vault", label: "Vault" },
     { value: "hash", label: "Hash" },
     { value: "password", label: "Password" },
     { value: "keys", label: "Keys" },
     { value: "uuid", label: "UUID" },
-    { value: "ssh", label: "SSH" },
-    { value: "vault", label: "Vault" }
+    { value: "ssh", label: "SSH" }
   ]
-  property string mode: "hash"
+  property string mode: "vault"
   property string input: ""
   // [{ label, value, secret }]
   property var results: []
