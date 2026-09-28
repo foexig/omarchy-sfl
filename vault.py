@@ -10,8 +10,8 @@ each vault is its own file, <name>.enc, with its own master password.
 
 Requests:
   {"op": "status"}                          -> {"vaults": [names]}
-  {"op": "delete", "key": hex?, "confirm": name} -> {"ok": true}
-      (without key it deletes a locked vault, e.g. a forgotten password)
+  {"op": "delete", "key": hex | "sudo": password, "confirm": name} -> {"ok": true}
+      (with sudo instead of key it deletes a locked vault, e.g. a forgotten password)
   {"op": "create", "password": str}         -> {"key": hex, "entries": [], "usernames": [], "emails": []}
   {"op": "unlock", "password": str}         -> {"key": hex, "entries", "usernames", "emails"}
   {"op": "save", "key": hex, "entries": [], "usernames": [], "emails": []} -> {"ok": true}
@@ -29,6 +29,7 @@ import fcntl
 import json
 import os
 import re
+import subprocess
 import sys
 
 from cryptography.exceptions import InvalidTag
@@ -144,6 +145,19 @@ def check_data(req):
     return data
 
 
+def check_sudo(password):
+    if password == "":
+        raise VaultError("Enter your sudo password")  # don't burn a sudo try
+    # -k: never reuse a cached sudo login; -S: password from stdin, not argv
+    try:
+        ok = subprocess.run(["sudo", "-k", "-S", "-p", "", "true"], input=password + "\n", text=True,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20).returncode == 0
+    except subprocess.TimeoutExpired:
+        ok = False
+    if not ok:
+        raise VaultError("Wrong sudo password (too many tries locks sudo for a while)")
+
+
 def list_vaults():
     try:
         return sorted((f[:-4] for f in os.listdir(DATA_DIR) if f.endswith(".enc") and NAME_RE.fullmatch(f[:-4])), key=str.lower)
@@ -191,12 +205,13 @@ def handle(req):
 
     if op == "delete":
         header = read_header()
-        if "key" in req:
-            decrypt(header, key_from(req))  # an open vault: make sure it's this one
-        # A locked vault can be deleted without its password: anyone who can
-        # run this could rm the file anyway, and it's useless if forgotten.
         if req.get("confirm") != name:
             raise VaultError("Type the vault name to confirm")
+        if "key" in req:
+            decrypt(header, key_from(req))  # an open vault: make sure it's this one
+        else:
+            # A locked vault (forgotten password) needs the sudo password
+            check_sudo(str(req.get("sudo", "")))
         for path in (VAULT, VAULT + ".bak"):
             if os.path.exists(path):
                 os.remove(path)
