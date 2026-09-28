@@ -51,6 +51,14 @@ Panel {
   // Username presets, most recently used first; the first is the default
   property var usernames: []
   property var emails: []
+  // Entry form fill orders: 6 slots of "username" | "email" | "password" | ""
+  readonly property int slotCount: 6
+  property var fillSignup: []
+  property var fillSignin: []
+  property string fillTarget: "signup" // which order the digit keys fill
+  property string hoveredElement: ""   // chip under the mouse
+  property string hoveredSlotKind: ""  // slot under the mouse
+  property int hoveredSlot: -1
 
   // Window that was focused when the panel opened: auto-type target
   property string targetWindow: ""
@@ -250,10 +258,10 @@ Panel {
     titleField.text = e.title || ""
     userPick.text = e.id ? (e.username || "") : (usernames[0] || "")
     emailPick.text = e.id ? (e.email || "") : (emails[0] || "")
-    // Which fields auto-type sends; older logins only had loginWith
-    var use = e.use || (e.loginWith ? { username: e.loginWith === "username", email: e.loginWith === "email" } : null)
-    userPick.checked = use ? use.username : userPick.text !== ""
-    emailPick.checked = use ? use.email : emailPick.text !== ""
+    var fill = e.id ? fillOf(e) : defaultFill(userPick.text !== "", emailPick.text !== "")
+    fillSignup = fill.signup
+    fillSignin = fill.signin
+    fillTarget = e.id ? "signin" : "signup"
     passField.text = e.password || ""
     pwMode = e.id ? "own" : "random"
     if (!e.id) pwGenProc.running = true
@@ -314,28 +322,75 @@ Panel {
     return (name.length > 2 && t.indexOf(name) !== -1) || (host !== "" && t.indexOf(host.split(".")[0]) !== -1)
   }
 
-  // Values auto-type sends, in order: checked username, checked email, password
-  function fillSequence(e) {
-    var use = e.use || { username: e.loginWith !== "email" && !!e.username, email: e.loginWith === "email" || !e.username }
-    var seq = []
-    if (use.username && e.username) seq.push(e.username)
-    if (use.email && e.email) seq.push(e.email)
-    seq.push(e.password || "")
-    return seq
+  function padSlots(list) {
+    var out = list.slice(0, slotCount)
+    while (out.length < slotCount) out.push("")
+    return out
   }
 
-  // Types the sequence with Tab between values, then Enter, into the window
-  // you came from. autotype.sh refuses if another window has focus by then.
-  function signIn(e) {
+  function defaultFill(hasUser, hasEmail) {
+    var signup = [], signin = []
+    if (hasUser) signup.push("username")
+    if (hasEmail) signup.push("email")
+    signin.push(hasUser || !hasEmail ? "username" : "email")
+    signup.push("password")
+    signin.push("password")
+    return { signup: padSlots(signup), signin: padSlots(signin) }
+  }
+
+  // A login's fill orders; v1.1 logins had checkboxes (use), v1.0 loginWith
+  function fillOf(e) {
+    if (e.fill) return { signup: padSlots(e.fill.signup || []), signin: padSlots(e.fill.signin || []) }
+    var use = e.use || { username: e.loginWith !== "email" && !!e.username, email: e.loginWith === "email" || !e.username }
+    var seq = []
+    if (use.username && e.username) seq.push("username")
+    if (use.email && e.email) seq.push("email")
+    seq.push("password")
+    return { signup: padSlots(seq), signin: padSlots(seq) }
+  }
+
+  function setSlot(kind, i, element) {
+    var list = (kind === "signup" ? fillSignup : fillSignin).slice()
+    list[i] = element
+    if (kind === "signup") fillSignup = list
+    else fillSignin = list
+  }
+
+  // Hover a Username/Email/Password chip and press 1-6 to put it in that
+  // slot; hover a slot and press 0/Backspace/Delete to clear it.
+  function handleFillKey(event) {
+    if (!editing) return false
+    var n = event.key - Qt.Key_0
+    if (hoveredElement !== "" && n >= 1 && n <= slotCount) {
+      setSlot(fillTarget, n - 1, hoveredElement)
+      return true
+    }
+    if (hoveredSlot >= 0 && (event.key === Qt.Key_0 || event.key === Qt.Key_Backspace || event.key === Qt.Key_Delete)) {
+      setSlot(hoveredSlotKind, hoveredSlot, "")
+      return true
+    }
+    return false
+  }
+
+  function signIn(e) { autoType(e, "signin") }
+
+  // Types the login's sign-up or sign-in order, Tab between values, then
+  // Enter, into the window you came from. autotype.sh refuses if another
+  // window has focus by then.
+  function autoType(e, kind) {
     if (autotypeProc.running) return
-    if (targetWindow === "") { error = "No window to type into: focus the login field, then open the vault"; return }
-    autotypeProc.payload = JSON.stringify({ seq: fillSequence(e), win: targetWindow })
+    if (targetWindow === "") { error = "No window to type into: focus the first field on the page, then open the vault"; return }
+    var seq = fillOf(e)[kind].filter(Boolean).map(function(el) { return e[el] || "" })
+    if (seq.length === 0) { error = "The " + (kind === "signup" ? "sign-up" : "sign-in") + " order is empty"; return }
+    autotypeProc.payload = JSON.stringify({ seq: seq, win: targetWindow })
     close()
     autotypeProc.running = true
     autoLock.restart()
   }
 
+  // andSignIn: auto-type afterwards (sign-up for a new login)
   function commitEdit(andSignIn) {
+    var isNew = !editing.id
     var title = titleField.text.trim()
     if (title === "") { error = "Title is required"; return }
     var e = {
@@ -343,7 +398,7 @@ Panel {
       title: title,
       username: userPick.text.trim(),
       email: emailPick.text.trim(),
-      use: { username: userPick.checked, email: emailPick.checked },
+      fill: { signup: fillSignup.slice(), signin: fillSignin.slice() },
       password: passField.text,
       url: urlField.text.trim(),
       notes: notesField.text,
@@ -351,15 +406,22 @@ Panel {
     }
     if (e.password === "") { error = "Password is empty"; return }
     if (e.email !== "" && !validEmail(e.email)) { error = "That email address doesn't look right"; return }
-    if (!e.use.username && !e.use.email) { error = "Tick username or email so auto-type knows what to fill in"; return }
-    if ((e.use.username && e.username === "") || (e.use.email && e.email === "")) { error = "A ticked field is empty"; return }
+    var names = { username: "Username", email: "Email", password: "Password" }
+    var kinds = [["signup", "Sign-up"], ["signin", "Sign-in"]]
+    for (var k = 0; k < kinds.length; k++) {
+      var slots = e.fill[kinds[k][0]]
+      for (var i = 0; i < slots.length; i++) {
+        if (slots[i] !== "" && e[slots[i]] === "") { error = kinds[k][1] + " slot " + (i + 1) + " uses " + names[slots[i]] + ", which is empty"; return }
+      }
+    }
+    if (e.fill.signin.filter(Boolean).length === 0) { error = "The sign-in order is empty"; return }
     var list = entries.filter(function(x) { return x.id !== e.id })
     list.push(e)
     list.sort(function(a, b) { return a.title.localeCompare(b.title) })
     // A username/email typed on the fly becomes a preset; using one makes it the default
     saveVault(list, withPreset(usernames, e.username, true), withPreset(emails, e.email, true), function() {
       closeEdit()
-      if (andSignIn) signIn(e)
+      if (andSignIn) autoType(e, isNew ? "signup" : "signin")
     })
   }
 
@@ -569,38 +631,117 @@ Panel {
     foreground: root.bar.foreground
     font.family: root.bar.fontFamily
     Keys.onPressed: function(event) {
-      if (event.key === Qt.Key_Escape) root.vaultEscape()
+      if (root.handleFillKey(event)) event.accepted = true
+      else if (event.key === Qt.Key_Escape) root.vaultEscape()
       else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) submit()
       else return
       event.accepted = true
     }
   }
 
-  // Entry form field with a "Saved" dropdown of presets; the box says
-  // whether auto-type fills it in
+  // Hover target for the fill-order keys, in front of each form field
+  component ElementChip: Rectangle {
+    id: chip
+    property string element: ""
+    property string label: ""
+    readonly property bool hot: chipHover.hovered
+    width: Style.space(78)
+    height: chipText.implicitHeight + Style.space(8)
+    anchors.verticalCenter: parent ? parent.verticalCenter : undefined
+    radius: Style.cornerRadius
+    color: hot ? Style.hoverFillFor(root.bar.foreground, Color.accent) : "transparent"
+    border.width: 1
+    border.color: hot ? Color.accent : root.dim
+    HoverHandler {
+      id: chipHover
+      onHoveredChanged: {
+        if (hovered) root.hoveredElement = chip.element
+        else if (root.hoveredElement === chip.element) root.hoveredElement = ""
+      }
+    }
+    Text {
+      id: chipText
+      anchors.centerIn: parent
+      text: chip.hot ? "press 1-" + root.slotCount : chip.label
+      color: chip.hot ? Color.accent : root.bar.foreground
+      font.family: root.bar.fontFamily
+      font.pixelSize: Style.font.bodySmall
+    }
+  }
+
+  // One fill order: a label plus numbered slots
+  component FillRow: Row {
+    id: fillRow
+    property string kind: ""
+    property string label: ""
+    readonly property var slots: kind === "signup" ? root.fillSignup : root.fillSignin
+    readonly property bool active: root.fillTarget === kind
+    width: parent ? parent.width : 0
+    spacing: Style.space(4)
+    Text {
+      id: fillLabel
+      width: Style.space(78)
+      anchors.verticalCenter: parent.verticalCenter
+      text: fillRow.label
+      color: fillRow.active ? Color.accent : root.dim
+      font.family: root.bar.fontFamily
+      font.pixelSize: Style.font.bodySmall
+      font.bold: fillRow.active
+      MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.fillTarget = fillRow.kind }
+    }
+    Repeater {
+      model: root.slotCount
+      delegate: Rectangle {
+        id: slot
+        required property int index
+        readonly property string element: fillRow.slots[index] || ""
+        width: (fillRow.width - fillLabel.width - root.slotCount * fillRow.spacing) / root.slotCount
+        height: slotText.implicitHeight + Style.space(8)
+        radius: Style.cornerRadius
+        color: slotHover.hovered ? Style.hoverFillFor(root.bar.foreground, Color.accent) : "transparent"
+        border.width: 1
+        border.color: fillRow.active ? Color.accent : root.dim
+        opacity: element === "" ? 0.6 : 1
+        HoverHandler {
+          id: slotHover
+          onHoveredChanged: {
+            if (hovered) { root.hoveredSlotKind = fillRow.kind; root.hoveredSlot = slot.index }
+            else if (root.hoveredSlotKind === fillRow.kind && root.hoveredSlot === slot.index) root.hoveredSlot = -1
+          }
+        }
+        Text {
+          id: slotText
+          anchors.centerIn: parent
+          text: (slot.index + 1) + (slot.element === "" ? "" : " " + { username: "User", email: "Mail", password: "Pass" }[slot.element])
+          color: slot.element === "" ? root.dim : root.bar.foreground
+          font.family: root.bar.fontFamily
+          font.pixelSize: Style.font.bodySmall
+        }
+        // Click: make this order the active one; click a filled slot again to clear it
+        MouseArea {
+          anchors.fill: parent
+          cursorShape: Qt.PointingHandCursor
+          onClicked: {
+            if (fillRow.active && slot.element !== "") root.setSlot(fillRow.kind, slot.index, "")
+            root.fillTarget = fillRow.kind
+          }
+        }
+      }
+    }
+  }
+
+  // Entry form field with a "Saved" dropdown of presets
   component PresetPicker: Row {
     id: picker
     property var presets: []
-    property bool checked: true
+    property string element: ""
+    property string label: ""
     property alias text: pickerField.text
     property alias field: pickerField
     property alias placeholderText: pickerField.placeholderText
     width: parent ? parent.width : 0
     spacing: Style.space(6)
-    Text {
-      id: box
-      anchors.verticalCenter: parent.verticalCenter
-      text: String.fromCodePoint(picker.checked ? 0xF0132 : 0xF0131) // nf-md-checkbox_marked / blank_outline
-      color: picker.checked ? Color.accent : root.dim
-      font.family: root.bar.fontFamily
-      font.pixelSize: Style.font.icon
-      MouseArea {
-        anchors.fill: parent
-        anchors.margins: -Style.space(3)
-        cursorShape: Qt.PointingHandCursor
-        onClicked: picker.checked = !picker.checked
-      }
-    }
+    ElementChip { id: box; element: picker.element; label: picker.label }
     VaultField {
       id: pickerField
       width: picker.width - box.width - picker.spacing - (picker.presets.length > 0 ? pick.width + picker.spacing : 0)
@@ -722,7 +863,9 @@ Panel {
       id: keyCatcher
       focus: true
       Keys.onPressed: function(event) {
-        if (event.key === Qt.Key_Escape) {
+        if (root.handleFillKey(event)) {
+          // placed or cleared a fill slot
+        } else if (event.key === Qt.Key_Escape) {
           root.close()
         } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_R) {
           root.generate()
@@ -1026,8 +1169,9 @@ Panel {
                   opacity: entryHover.hovered ? 1 : 0.35
 
                   Repeater {
-                    // nf-md-login / nf-md-account / nf-md-email / nf-md-key / nf-md-pencil
+                    // nf-md-account_plus / nf-md-login / nf-md-account / nf-md-email / nf-md-key / nf-md-pencil
                     model: [
+                      { icon: 0xF0014, action: "signup" },
                       { icon: 0xF0342, action: "signin" },
                       { icon: 0xF0004, action: "username" },
                       { icon: 0xF01EE, action: "email" },
@@ -1038,7 +1182,7 @@ Panel {
                     delegate: Text {
                       required property var modelData
                       readonly property string copyLabel: entryRow.modelData.title + " " + modelData.action
-                      visible: modelData.action === "edit" || modelData.action === "signin" || !!entryRow.modelData[modelData.action]
+                      visible: modelData.action === "edit" || modelData.action === "signin" || modelData.action === "signup" || !!entryRow.modelData[modelData.action]
                       text: root.copiedLabel === copyLabel ? String.fromCodePoint(0xF012C) : String.fromCodePoint(modelData.icon)
                       color: root.copiedLabel === copyLabel ? Color.accent : root.bar.foreground
                       font.family: root.bar.fontFamily
@@ -1051,7 +1195,7 @@ Panel {
                         onClicked: {
                           var a = parent.modelData.action
                           if (a === "edit") root.startEdit(entryRow.modelData)
-                          else if (a === "signin") root.signIn(entryRow.modelData)
+                          else if (a === "signin" || a === "signup") root.autoType(entryRow.modelData, a)
                           else root.copyEntry(entryRow.modelData, a)
                         }
                       }
@@ -1069,7 +1213,7 @@ Panel {
             spacing: Style.space(6)
 
             Text {
-              text: root.editing && root.editing.id ? "Edit entry" : "New login: pick a username or email and a password, then Save & sign in"
+              text: root.editing && root.editing.id ? "Edit entry" : "New login: fill in the fields, set the typing order, then Save & sign up"
               color: root.dim
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.bodySmall
@@ -1078,18 +1222,16 @@ Panel {
             PresetPicker {
               id: userPick
               presets: root.usernames
+              element: "username"
+              label: "Username"
               placeholderText: "Username (typed ones are remembered)"
             }
             PresetPicker {
               id: emailPick
               presets: root.emails
+              element: "email"
+              label: "Email"
               placeholderText: "Email (typed ones are remembered)"
-            }
-            Text {
-              text: "Ticked fields are typed in this order, then the password"
-              color: root.dim
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.bodySmall
             }
             ButtonGroup {
               options: [{ value: "random", label: "Random password" }, { value: "own", label: "Own password" }]
@@ -1102,9 +1244,10 @@ Panel {
             Row {
               id: passRow
               spacing: Style.space(6)
+              ElementChip { id: passChip; element: "password"; label: "Password" }
               VaultField {
                 id: passField
-                width: vaultColumn.width - showButton.width - genButton.width - 2 * passRow.spacing
+                width: vaultColumn.width - passChip.width - showButton.width - genButton.width - 3 * passRow.spacing
                 password: !root.showPass
                 placeholderText: "Password"
                 onSubmit: root.commitEdit(true)
@@ -1125,13 +1268,26 @@ Panel {
                 onClicked: root.setPwMode("random")
               }
             }
+
+            // Fill orders: what auto-type types, Tab-separated, then Enter
+            Text {
+              topPadding: Style.space(4)
+              width: parent.width
+              wrapMode: Text.Wrap
+              text: "Typing order: hover Username, Email or Password and press 1-" + root.slotCount + " to place it in the highlighted row. Click a filled slot or hover it and press 0 to clear."
+              color: root.dim
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+            FillRow { kind: "signup"; label: "Sign-up" }
+            FillRow { kind: "signin"; label: "Sign-in" }
             VaultField { id: urlField; placeholderText: "URL (optional, helps match the page)"; onSubmit: root.commitEdit(true) }
             VaultField { id: notesField; placeholderText: "Notes"; onSubmit: root.commitEdit(true) }
             Row {
               spacing: Style.space(6)
               VaultButton {
-                text: "Save & sign in"
-                iconText: String.fromCodePoint(0xF0342) // nf-md-login
+                text: root.editing && root.editing.id ? "Save & sign in" : "Save & sign up"
+                iconText: String.fromCodePoint(root.editing && root.editing.id ? 0xF0342 : 0xF0014) // nf-md-login / account_plus
                 bordered: true
                 onClicked: root.commitEdit(true)
               }
