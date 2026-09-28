@@ -28,6 +28,7 @@ Panel {
   // [{ label, value, secret }]
   property var results: []
   property string error: ""
+  property bool errorFading: false
   property string copiedLabel: ""
   property bool pending: false
   readonly property color dim: root.bar ? Qt.darker(root.bar.foreground, 1.5) : "gray"
@@ -45,6 +46,7 @@ Panel {
   property string vaultFilter: ""
   property var editing: null // entry being edited; {} for a new one
   property bool deleteArmed: false
+  property real vaultReveal: 0 // drawer height factor: 0 shut, 1 open
   property bool lockedDelete: false // locked screen: delete-vault confirm shown
   property bool rekeying: false // settings view: username presets + master password
   property bool showPass: false
@@ -227,6 +229,9 @@ Panel {
     vaultNameField.text = ""
     vaultState = "unlocked"
     autoLock.restart()
+    revealShut.stop()
+    vaultReveal = 0
+    revealOpen.restart()
     Qt.callLater(focusMode)
   }
 
@@ -247,6 +252,9 @@ Panel {
 
   function lockVault() {
     autoLock.stop()
+    revealOpen.stop()
+    revealShut.stop()
+    vaultReveal = 0
     vaultKey = ""
     entries = []
     usernames = []
@@ -478,11 +486,57 @@ Panel {
     autoLock.restart()
   }
 
+  // Errors fade out after a few seconds
+  onErrorChanged: {
+    errorFading = false
+    if (error !== "") errorTimer.restart()
+  }
+
+  Timer {
+    id: errorTimer
+    interval: 6000
+    onTriggered: { root.errorFading = true; errorClear.restart() }
+  }
+
+  Timer {
+    id: errorClear
+    interval: 700
+    onTriggered: root.error = ""
+  }
+
+  // Open/shut the logins drawer
+  NumberAnimation {
+    id: revealOpen
+    target: root
+    property: "vaultReveal"
+    to: 1
+    duration: 380
+    easing.type: Easing.OutCubic
+  }
+
+  NumberAnimation {
+    id: revealShut
+    target: root
+    property: "vaultReveal"
+    to: 0
+    duration: 300
+    easing.type: Easing.InCubic
+    onFinished: root.lockVault()
+  }
+
+  // Slide the drawer shut, then lock; straight away if nobody's watching
+  function requestLock() {
+    if (revealShut.running) return
+    revealOpen.stop()
+    if (root.opened && vaultState === "unlocked" && !editing && !rekeying) revealShut.start()
+    else lockVault()
+  }
+
   // Lock after 5 idle minutes; the key is wiped from memory.
   Timer {
     id: autoLock
     interval: 5 * 60 * 1000
-    onTriggered: root.lockVault()
+    onTriggered: root.requestLock()
   }
 
   // Wipe a copied secret from the clipboard after 30 s, unless something
@@ -1025,6 +1079,8 @@ Panel {
           color: Color.urgent
           font.family: root.bar.fontFamily
           font.pixelSize: Style.font.bodySmall
+          opacity: root.errorFading ? 0 : 1
+          Behavior on opacity { NumberAnimation { duration: 600; easing.type: Easing.InOutQuad } }
         }
 
         // ---- Vault
@@ -1160,159 +1216,196 @@ Panel {
             }
           }
 
-          // Toolbar
-          Row {
-            id: toolbar
-            visible: vaultColumn.listing
-            spacing: Style.space(6)
-
-            VaultField {
-              id: searchField
-              width: vaultColumn.width - newButton.width - rekeyButton.width - 2 * toolbar.spacing
-              placeholderText: "Search… (Enter signs in with the top entry)"
-              onTextChanged: root.vaultFilter = text
-              onSubmit: if (root.filteredEntries.length > 0) root.signIn(root.filteredEntries[0])
-            }
-            VaultButton {
-              id: newButton
-              text: "Sign up"
-              iconText: String.fromCodePoint(0xF0415) // nf-md-plus
-              tooltipText: "New login: pick username, email and password, then set the typing order"
-              bordered: true
-              onClicked: root.startEdit({})
-            }
-            VaultButton {
-              id: rekeyButton
-              iconText: String.fromCodePoint(0xF0493) // nf-md-cog
-              tooltipText: "Usernames & master password"
-              bordered: true
-              onClicked: { root.rekeying = true; Qt.callLater(root.focusMode) }
-            }
-          }
-
-          Text {
-            visible: vaultColumn.listing && root.filteredEntries.length === 0
-            width: parent.width
-            horizontalAlignment: Text.AlignHCenter
-            topPadding: Style.space(6)
-            text: root.entries.length === 0 ? "No entries yet. Click New to add one." : "No matches."
-            color: root.dim
-            font.family: root.bar.fontFamily
-            font.pixelSize: Style.font.body
-          }
-
-          // Entries
-          Column {
+          // Drawer: the logins slide open on unlock and shut on lock
+          Item {
+            id: drawer
             visible: vaultColumn.listing
             width: parent.width
-            spacing: Style.space(4)
+            height: Math.round(drawerColumn.implicitHeight * root.vaultReveal)
+            clip: true
 
-            Repeater {
-              model: vaultColumn.listing ? root.filteredEntries : []
+            Column {
+              id: drawerColumn
+              width: parent.width
+              spacing: Style.space(8)
 
-              delegate: Rectangle {
-                id: entryRow
-                required property var modelData
+              // Toolbar
+              Row {
+                id: toolbar
+                visible: vaultColumn.listing
+                spacing: Style.space(6)
 
-                width: parent ? parent.width : 0
-                height: Math.max(entryText.implicitHeight, entryActions.implicitHeight) + Style.space(10)
-                radius: Style.cornerRadius
-                color: entryHover.hovered ? Style.hoverFillFor(root.bar.foreground, Color.accent) : "transparent"
-
-                HoverHandler { id: entryHover }
-
-                // Clicking the row copies the password
-                MouseArea {
-                  anchors.fill: parent
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: root.copyEntry(entryRow.modelData, "password")
+                VaultField {
+                  id: searchField
+                  width: vaultColumn.width - newButton.width - rekeyButton.width - 2 * toolbar.spacing
+                  placeholderText: "Search… (Enter signs in with the top entry)"
+                  onTextChanged: root.vaultFilter = text
+                  onSubmit: if (root.filteredEntries.length > 0) root.signIn(root.filteredEntries[0])
                 }
-
-                Column {
-                  id: entryText
-                  anchors.left: parent.left
-                  anchors.leftMargin: Style.space(6)
-                  anchors.right: entryActions.left
-                  anchors.rightMargin: Style.space(6)
-                  anchors.verticalCenter: parent.verticalCenter
-                  spacing: Style.space(2)
-
-                  Text {
-                    width: parent.width
-                    textFormat: Text.PlainText
-                    elide: Text.ElideRight
-                    text: entryRow.modelData.title
-                    color: root.matchesTarget(entryRow.modelData) ? Color.accent : root.bar.foreground
-                    font.family: root.bar.fontFamily
-                    font.pixelSize: Style.font.body
-                    font.bold: true
-                  }
-
-                  Text {
-                    visible: text !== ""
-                    width: parent.width
-                    textFormat: Text.PlainText
-                    elide: Text.ElideRight
-                    text: [entryRow.modelData.username, entryRow.modelData.email, entryRow.modelData.url].filter(Boolean).join("  ·  ")
-                    color: root.dim
-                    font.family: root.bar.fontFamily
-                    font.pixelSize: Style.font.bodySmall
-                  }
+                VaultButton {
+                  id: newButton
+                  text: "Sign up"
+                  iconText: String.fromCodePoint(0xF0415) // nf-md-plus
+                  tooltipText: "New login: pick username, email and password, then set the typing order"
+                  bordered: true
+                  onClicked: root.startEdit({})
                 }
+                VaultButton {
+                  id: rekeyButton
+                  iconText: String.fromCodePoint(0xF0493) // nf-md-cog
+                  tooltipText: "Usernames & master password"
+                  bordered: true
+                  onClicked: { root.rekeying = true; Qt.callLater(root.focusMode) }
+                }
+              }
 
-                Row {
-                  id: entryActions
-                  anchors.right: parent.right
-                  anchors.rightMargin: Style.space(8)
-                  anchors.verticalCenter: parent.verticalCenter
-                  spacing: Style.space(3)
+              Text {
+                visible: vaultColumn.listing && root.filteredEntries.length === 0
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
+                topPadding: Style.space(6)
+                text: root.entries.length === 0 ? "No entries yet. Click New to add one." : "No matches."
+                color: root.dim
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.body
+              }
 
-                  Repeater {
-                    // nf-md-account_plus / nf-md-login / nf-md-account / nf-md-email / nf-md-key / nf-md-pencil
-                    model: [
-                      { icon: 0xF0014, action: "signup", tip: "Sign up: types the sign-up order into the page you came from" },
-                      { icon: 0xF0342, action: "signin", tip: "Sign in: types the sign-in order, then Enter" },
-                      { icon: 0xF0004, action: "username", tip: "Copy username" },
-                      { icon: 0xF01EE, action: "email", tip: "Copy email" },
-                      { icon: 0xF0306, action: "password", tip: "Copy password (wiped from the clipboard after 30 s)" },
-                      { icon: 0xF03EB, action: "edit", tip: "Edit this login and its typing orders" }
-                    ]
+              // Entries
+              Column {
+                visible: vaultColumn.listing
+                width: parent.width
+                spacing: Style.space(4)
 
-                    delegate: VaultButton {
-                      required property var modelData
-                      readonly property string copyLabel: entryRow.modelData.title + " " + modelData.action
-                      readonly property bool copied: root.copiedLabel === copyLabel
-                      readonly property bool typing: modelData.action === "signin" || modelData.action === "signup"
-                      visible: modelData.action === "edit" || typing || !!entryRow.modelData[modelData.action]
-                      iconText: String.fromCodePoint(copied ? 0xF012C : modelData.icon)
-                      iconSize: Style.font.icon * 1.2
-                      bordered: typing
-                      selected: copied
-                      tooltipText: modelData.tip
-                      onClicked: {
-                        var a = modelData.action
-                        if (a === "edit") root.startEdit(entryRow.modelData)
-                        else if (typing) root.autoType(entryRow.modelData, a)
-                        else root.copyEntry(entryRow.modelData, a)
+                Repeater {
+                  model: vaultColumn.listing ? root.filteredEntries : []
+
+                  delegate: Rectangle {
+                    id: entryRow
+                    required property var modelData
+
+                    width: parent ? parent.width : 0
+                    height: Math.max(entryText.implicitHeight, entryActions.implicitHeight) + Style.space(10)
+                    radius: Style.cornerRadius
+                    color: entryHover.hovered ? Style.hoverFillFor(root.bar.foreground, Color.accent) : "transparent"
+
+                    HoverHandler { id: entryHover }
+
+                    // Clicking the row copies the password
+                    MouseArea {
+                      anchors.fill: parent
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: root.copyEntry(entryRow.modelData, "password")
+                    }
+
+                    Column {
+                      id: entryText
+                      anchors.left: parent.left
+                      anchors.leftMargin: Style.space(6)
+                      anchors.right: entryActions.left
+                      anchors.rightMargin: Style.space(6)
+                      anchors.verticalCenter: parent.verticalCenter
+                      spacing: Style.space(2)
+
+                      Text {
+                        width: parent.width
+                        textFormat: Text.PlainText
+                        elide: Text.ElideRight
+                        text: entryRow.modelData.title
+                        color: root.matchesTarget(entryRow.modelData) ? Color.accent : root.bar.foreground
+                        font.family: root.bar.fontFamily
+                        font.pixelSize: Style.font.body
+                        font.bold: true
+                      }
+
+                      Text {
+                        visible: text !== ""
+                        width: parent.width
+                        textFormat: Text.PlainText
+                        elide: Text.ElideRight
+                        text: [entryRow.modelData.username, entryRow.modelData.email, entryRow.modelData.url].filter(Boolean).join("  ·  ")
+                        color: root.dim
+                        font.family: root.bar.fontFamily
+                        font.pixelSize: Style.font.bodySmall
+                      }
+                    }
+
+                    Row {
+                      id: entryActions
+                      anchors.right: parent.right
+                      anchors.rightMargin: Style.space(8)
+                      anchors.verticalCenter: parent.verticalCenter
+                      spacing: Style.space(3)
+
+                      Repeater {
+                        // nf-md-account_plus / nf-md-login / nf-md-account / nf-md-email / nf-md-key / nf-md-pencil
+                        model: [
+                          { icon: 0xF0014, action: "signup", tip: "Sign up: types the sign-up order into the page you came from" },
+                          { icon: 0xF0342, action: "signin", tip: "Sign in: types the sign-in order, then Enter" },
+                          { icon: 0xF0004, action: "username", tip: "Copy username" },
+                          { icon: 0xF01EE, action: "email", tip: "Copy email" },
+                          { icon: 0xF0306, action: "password", tip: "Copy password (wiped from the clipboard after 30 s)" },
+                          { icon: 0xF03EB, action: "edit", tip: "Edit this login and its typing orders" }
+                        ]
+
+                        delegate: VaultButton {
+                          required property var modelData
+                          readonly property string copyLabel: entryRow.modelData.title + " " + modelData.action
+                          readonly property bool copied: root.copiedLabel === copyLabel
+                          readonly property bool typing: modelData.action === "signin" || modelData.action === "signup"
+                          visible: modelData.action === "edit" || typing || !!entryRow.modelData[modelData.action]
+                          iconText: String.fromCodePoint(copied ? 0xF012C : modelData.icon)
+                          iconSize: Style.font.icon * 1.2
+                          bordered: typing
+                          selected: copied
+                          tooltipText: modelData.tip
+                          onClicked: {
+                            var a = modelData.action
+                            if (a === "edit") root.startEdit(entryRow.modelData)
+                            else if (typing) root.autoType(entryRow.modelData, a)
+                            else root.copyEntry(entryRow.modelData, a)
+                          }
+                        }
                       }
                     }
                   }
                 }
               }
-            }
-          }
 
-          VaultButton {
-            visible: vaultColumn.listing
-            width: parent.width
-            text: "Lock " + root.vaultName
-            iconText: String.fromCodePoint(0xF033E) // nf-md-lock
-            iconSize: Style.font.icon * 1.2
-            fontSize: Style.font.title
-            verticalPadding: Style.space(8)
-            bordered: true
-            tooltipText: "Lock this vault and wipe its key from memory. Lock it to switch to another vault."
-            onClicked: root.lockVault()
+              // The whole bottom is the lock button
+              Rectangle {
+                id: lockBar
+                width: parent.width
+                height: Style.space(46)
+                radius: Style.cornerRadius
+                color: lockMouse.pressed ? Qt.darker(Color.accent, 1.3) : lockMouse.containsMouse ? Color.accent : "transparent"
+                border.width: 2
+                border.color: Color.accent
+                scale: lockMouse.pressed ? 0.98 : 1
+                Behavior on color { ColorAnimation { duration: 120 } }
+                Behavior on scale { NumberAnimation { duration: 90 } }
+
+                Text {
+                  anchors.centerIn: parent
+                  textFormat: Text.PlainText
+                  text: String.fromCodePoint(0xF033E) + "   Lock " + root.vaultName // nf-md-lock
+                  color: lockMouse.containsMouse ? Color.popups.background : Color.accent
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.title
+                  font.bold: true
+                }
+                MouseArea {
+                  id: lockMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.requestLock()
+                }
+                PanelToolTip {
+                  visible: lockMouse.containsMouse
+                  text: "Shut this vault and wipe its key from memory. Lock it to switch to another vault."
+                }
+              }
+            }
           }
 
           // Entry form

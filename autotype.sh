@@ -8,7 +8,7 @@ set -euo pipefail
 IFS= read -r req
 win=$(jq -r '.win' <<<"$req")
 
-fail() { notify-send -u critical "Vault auto-type" "$1"; echo "$1" >&2; exit 1; }
+fail() { notify-send -u low -t 5000 "Vault auto-type" "$1"; echo "$1" >&2; exit 1; }
 
 sleep 0.4 # let focus go back from the panel to the page
 active=$(hyprctl activewindow -j)
