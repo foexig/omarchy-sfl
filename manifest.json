@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "fabio.crypto",
   "name": "Crypto",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "fabio",
   "description": "Encrypted password vault, plus hashes, passwords, keys, UUIDs and SSH keypairs, click to copy",
   "kinds": [

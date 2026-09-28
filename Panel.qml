@@ -51,7 +51,7 @@ Panel {
   // Username presets, most recently used first; the first is the default
   property var usernames: []
   property var emails: []
-  property string loginWith: "username" // entry form: which one auto-type sends
+
   // Window that was focused when the panel opened: auto-type target
   property string targetWindow: ""
   property string targetTitle: ""
@@ -250,7 +250,10 @@ Panel {
     titleField.text = e.title || ""
     userPick.text = e.id ? (e.username || "") : (usernames[0] || "")
     emailPick.text = e.id ? (e.email || "") : (emails[0] || "")
-    loginWith = e.loginWith || (userPick.text !== "" || emailPick.text === "" ? "username" : "email")
+    // Which fields auto-type sends; older logins only had loginWith
+    var use = e.use || (e.loginWith ? { username: e.loginWith === "username", email: e.loginWith === "email" } : null)
+    userPick.checked = use ? use.username : userPick.text !== ""
+    emailPick.checked = use ? use.email : emailPick.text !== ""
     passField.text = e.password || ""
     pwMode = e.id ? "own" : "random"
     if (!e.id) pwGenProc.running = true
@@ -311,13 +314,22 @@ Panel {
     return (name.length > 2 && t.indexOf(name) !== -1) || (host !== "" && t.indexOf(host.split(".")[0]) !== -1)
   }
 
-  // Types username, Tab, password, Enter into the window you came from.
-  // autotype.sh refuses if another window has focus by then.
+  // Values auto-type sends, in order: checked username, checked email, password
+  function fillSequence(e) {
+    var use = e.use || { username: e.loginWith !== "email" && !!e.username, email: e.loginWith === "email" || !e.username }
+    var seq = []
+    if (use.username && e.username) seq.push(e.username)
+    if (use.email && e.email) seq.push(e.email)
+    seq.push(e.password || "")
+    return seq
+  }
+
+  // Types the sequence with Tab between values, then Enter, into the window
+  // you came from. autotype.sh refuses if another window has focus by then.
   function signIn(e) {
     if (autotypeProc.running) return
     if (targetWindow === "") { error = "No window to type into: focus the login field, then open the vault"; return }
-    var login = e.loginWith === "email" ? (e.email || e.username) : (e.username || e.email)
-    autotypeProc.payload = JSON.stringify({ u: login || "", p: e.password || "", win: targetWindow })
+    autotypeProc.payload = JSON.stringify({ seq: fillSequence(e), win: targetWindow })
     close()
     autotypeProc.running = true
     autoLock.restart()
@@ -331,7 +343,7 @@ Panel {
       title: title,
       username: userPick.text.trim(),
       email: emailPick.text.trim(),
-      loginWith: loginWith,
+      use: { username: userPick.checked, email: emailPick.checked },
       password: passField.text,
       url: urlField.text.trim(),
       notes: notesField.text,
@@ -339,6 +351,8 @@ Panel {
     }
     if (e.password === "") { error = "Password is empty"; return }
     if (e.email !== "" && !validEmail(e.email)) { error = "That email address doesn't look right"; return }
+    if (!e.use.username && !e.use.email) { error = "Tick username or email so auto-type knows what to fill in"; return }
+    if ((e.use.username && e.username === "") || (e.use.email && e.email === "")) { error = "A ticked field is empty"; return }
     var list = entries.filter(function(x) { return x.id !== e.id })
     list.push(e)
     list.sort(function(a, b) { return a.title.localeCompare(b.title) })
@@ -562,18 +576,34 @@ Panel {
     }
   }
 
-  // Entry form field with a "Saved" dropdown of presets
+  // Entry form field with a "Saved" dropdown of presets; the box says
+  // whether auto-type fills it in
   component PresetPicker: Row {
     id: picker
     property var presets: []
+    property bool checked: true
     property alias text: pickerField.text
     property alias field: pickerField
     property alias placeholderText: pickerField.placeholderText
     width: parent ? parent.width : 0
     spacing: Style.space(6)
+    Text {
+      id: box
+      anchors.verticalCenter: parent.verticalCenter
+      text: String.fromCodePoint(picker.checked ? 0xF0132 : 0xF0131) // nf-md-checkbox_marked / blank_outline
+      color: picker.checked ? Color.accent : root.dim
+      font.family: root.bar.fontFamily
+      font.pixelSize: Style.font.icon
+      MouseArea {
+        anchors.fill: parent
+        anchors.margins: -Style.space(3)
+        cursorShape: Qt.PointingHandCursor
+        onClicked: picker.checked = !picker.checked
+      }
+    }
     VaultField {
       id: pickerField
-      width: picker.presets.length > 0 ? picker.width - pick.width - picker.spacing : picker.width
+      width: picker.width - box.width - picker.spacing - (picker.presets.length > 0 ? pick.width + picker.spacing : 0)
       onSubmit: root.commitEdit(true)
     }
     Dropdown {
@@ -1055,23 +1085,11 @@ Panel {
               presets: root.emails
               placeholderText: "Email (typed ones are remembered)"
             }
-            Row {
-              spacing: Style.space(8)
-              Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: "Sign in with"
-                color: root.dim
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.bodySmall
-              }
-              ButtonGroup {
-                options: [{ value: "username", label: "Username" }, { value: "email", label: "Email" }]
-                value: root.loginWith
-                focusable: false
-                foreground: root.bar.foreground
-                fontFamily: root.bar.fontFamily
-                onChanged: function(v) { root.loginWith = v }
-              }
+            Text {
+              text: "Ticked fields are typed in this order, then the password"
+              color: root.dim
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.bodySmall
             }
             ButtonGroup {
               options: [{ value: "random", label: "Random password" }, { value: "own", label: "Own password" }]
