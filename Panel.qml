@@ -1038,9 +1038,22 @@ Panel {
           readonly property bool isLocked: root.vaultState === "locked"
           readonly property bool listing: root.vaultState === "unlocked" && !root.editing && !root.rekeying
 
-          // Vault picker; switching locks the open vault
+          // Open vault: just its name; lock it (button at the bottom) to switch
+          Text {
+            visible: root.vaultState === "unlocked"
+            width: parent.width
+            textFormat: Text.PlainText
+            elide: Text.ElideRight
+            text: String.fromCodePoint(0xF033F) + "  Vault: " + root.vaultName // nf-md-lock_open
+            color: Color.accent
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.body
+            font.bold: true
+          }
+
+          // Vault picker, only while locked
           Dropdown {
-            visible: root.vaultNames.length > 0 && !root.editing && !root.rekeying
+            visible: root.vaultNames.length > 0 && root.vaultState !== "unlocked"
             width: parent.width
             showLabel: false
             enabled: !vaultProc.running
@@ -1155,7 +1168,7 @@ Panel {
 
             VaultField {
               id: searchField
-              width: vaultColumn.width - newButton.width - rekeyButton.width - lockButton.width - 3 * toolbar.spacing
+              width: vaultColumn.width - newButton.width - rekeyButton.width - 2 * toolbar.spacing
               placeholderText: "Search… (Enter signs in with the top entry)"
               onTextChanged: root.vaultFilter = text
               onSubmit: if (root.filteredEntries.length > 0) root.signIn(root.filteredEntries[0])
@@ -1174,13 +1187,6 @@ Panel {
               tooltipText: "Usernames & master password"
               bordered: true
               onClicked: { root.rekeying = true; Qt.callLater(root.focusMode) }
-            }
-            VaultButton {
-              id: lockButton
-              iconText: String.fromCodePoint(0xF033E) // nf-md-lock
-              tooltipText: "Lock now"
-              bordered: true
-              onClicked: root.lockVault()
             }
           }
 
@@ -1294,6 +1300,19 @@ Panel {
                 }
               }
             }
+          }
+
+          VaultButton {
+            visible: vaultColumn.listing
+            width: parent.width
+            text: "Lock " + root.vaultName
+            iconText: String.fromCodePoint(0xF033E) // nf-md-lock
+            iconSize: Style.font.icon * 1.2
+            fontSize: Style.font.title
+            verticalPadding: Style.space(8)
+            bordered: true
+            tooltipText: "Lock this vault and wipe its key from memory. Lock it to switch to another vault."
+            onClicked: root.lockVault()
           }
 
           // Entry form
