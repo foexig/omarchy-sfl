@@ -362,10 +362,16 @@ Panel {
   }
 
   // Clicking a Username/Email/Password chip appends it to the active order
+  // Index after the last filled slot (Enter gaps stay put); -1 when full
+  function nextSlot(list) {
+    for (var i = list.length - 1; i >= 0; i--) if (list[i]) return i + 1 < list.length ? i + 1 : -1
+    return 0
+  }
+
   function appendSlot(element) {
     var list = fillTarget === "signup" ? fillSignup : fillSignin
-    var i = list.indexOf("")
-    if (i === -1) { error = "That order is full: click a slot to remove it first"; return }
+    var i = nextSlot(list)
+    if (i === -1) { error = "That order is full: click a slot to remove it, or press 1-" + slotCount + " while hovering to replace one"; return }
     setSlot(fillTarget, i, element)
   }
 
@@ -398,7 +404,12 @@ Panel {
   function autoType(e, kind) {
     if (autotypeProc.running) return
     if (targetWindow === "") { error = "No window to type into: focus the first field on the page, then open the vault"; return }
-    var seq = fillOf(e)[kind].filter(Boolean).map(function(el) { return e[el] || "" })
+    // Empty slots between filled ones are an Enter (null); before the first
+    // and after the last they're ignored, so the final Enter comes once
+    var slots = fillOf(e)[kind]
+    var first = -1, last = -1
+    slots.forEach(function(el, i) { if (el) { if (first < 0) first = i; last = i } })
+    var seq = first < 0 ? [] : slots.slice(first, last + 1).map(function(el) { return el ? (e[el] || "") : null })
     if (seq.length === 0) { error = "The " + (kind === "signup" ? "sign-up" : "sign-in") + " order is empty: edit the login (pencil) to set it"; return }
     autotypeProc.payload = JSON.stringify({ seq: seq, win: targetWindow })
     close()
@@ -762,6 +773,12 @@ Panel {
     property string label: ""
     readonly property var slots: kind === "signup" ? root.fillSignup : root.fillSignin
     readonly property bool active: root.fillTarget === kind
+    // empty slots strictly between these press Enter
+    readonly property int firstFilled: slots.findIndex(Boolean)
+    readonly property int lastFilled: {
+      for (var i = slots.length - 1; i >= 0; i--) if (slots[i]) return i
+      return -1
+    }
     width: parent ? parent.width : 0
     spacing: Style.space(4)
     Text {
@@ -792,7 +809,8 @@ Panel {
         required property int index
         readonly property string element: fillRow.slots[index] || ""
         // the slot the next click on a field fills
-        readonly property bool next: fillRow.active && index === fillRow.slots.indexOf("")
+        readonly property bool next: fillRow.active && index === root.nextSlot(fillRow.slots)
+        readonly property bool isEnter: element === "" && index > fillRow.firstFilled && index < fillRow.lastFilled
         width: (fillRow.width - fillLabel.width - clearButton.width - (root.slotCount + 1) * fillRow.spacing) / root.slotCount
         height: slotText.implicitHeight + Style.space(10)
         anchors.verticalCenter: parent ? parent.verticalCenter : undefined
@@ -800,11 +818,14 @@ Panel {
         color: slotHover.hovered ? Style.hoverFillFor(root.bar.foreground, Color.accent) : "transparent"
         border.width: next ? 2 : 1
         border.color: fillRow.active ? Color.accent : root.dim
-        opacity: element === "" && !next ? 0.55 : 1
+        opacity: element === "" && !next && !isEnter ? 0.55 : 1
         Behavior on opacity { NumberAnimation { duration: 120 } }
         PanelToolTip {
           visible: slotHover.hovered
-          text: slot.element !== "" ? "Click to remove" : (slot.next ? "Next: click Username, Email or Password to fill it" : "Empty")
+          text: slot.element !== "" ? "Click to remove"
+            : slot.isEnter ? "Presses Enter here, then waits 1.5 s for the next page" + (slot.next ? ". Click a field to fill it instead" : "")
+            : slot.next ? "Next: click Username, Email or Password to fill it"
+            : "Empty. An empty slot between two fields presses Enter"
         }
         HoverHandler {
           id: slotHover
@@ -816,9 +837,9 @@ Panel {
         Text {
           id: slotText
           anchors.centerIn: parent
-          text: slot.element === "" ? String(slot.index + 1) : { username: "User", email: "Mail", password: "Pass" }[slot.element]
-          color: slot.element === "" ? root.dim : root.bar.foreground
-          font.bold: slot.element !== ""
+          text: slot.isEnter ? "↵ Enter" : slot.element === "" ? String(slot.index + 1) : { username: "User", email: "Mail", password: "Pass" }[slot.element]
+          color: slot.isEnter ? Color.accent : slot.element === "" ? root.dim : root.bar.foreground
+          font.bold: slot.element !== "" || slot.isEnter
           font.family: root.bar.fontFamily
           font.pixelSize: Style.font.bodySmall
         }
@@ -1493,7 +1514,7 @@ Panel {
               topPadding: Style.space(4)
               width: parent.width
               wrapMode: Text.Wrap
-              text: "Typing order: click Username, Email or Password in the order the page asks for them. They go into the highlighted row, Tab between each, Enter at the end."
+              text: "Typing order: click Username, Email or Password in the order the page asks for them. They go into the highlighted row, Tab between each, Enter at the end. Leave a slot empty between two fields to press Enter there (for sites that ask one field per page)."
               color: root.dim
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.bodySmall
