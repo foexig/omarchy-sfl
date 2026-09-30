@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "id": "fabio.crypto",
-  "name": "Crypto",
-  "version": "2.3.0",
+  "name": "SFL: Secure Fast Login",
+  "version": "1.0.0",
   "author": "fabio",
-  "description": "Encrypted password vault, plus hashes, passwords, keys, UUIDs and SSH keypairs, click to copy",
+  "description": "Secure Fast Login for Omarchy: encrypted password vault with auto-type, plus hashes, passwords, keys, UUIDs and SSH keypairs, click to copy",
   "kinds": [
     "bar-widget"
   ],
@@ -12,8 +12,8 @@
     "barWidget": "BarWidget.qml"
   },
   "barWidget": {
-    "displayName": "Crypto",
-    "description": "Encrypted password vault, plus hashes, passwords, keys, UUIDs and SSH keypairs, click to copy",
+    "displayName": "SFL: Secure Fast Login",
+    "description": "Secure Fast Login for Omarchy: encrypted password vault with auto-type, plus hashes, passwords, keys, UUIDs and SSH keypairs, click to copy",
     "category": "Info",
     "allowMultiple": false,
     "defaultSection": "right"

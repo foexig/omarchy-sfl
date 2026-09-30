@@ -1,6 +1,6 @@
-# Crypto — Omarchy bar plugin
+# SFL: Secure Fast Login v1.0 for Omarchy
 
-An encrypted password vault for the Omarchy shell bar, plus quick generators
+**SFL** is an encrypted password vault for the Omarchy shell bar, plus quick generators
 for hashes, passwords, keys, UUIDs and SSH keypairs. Click any value to copy it.
 
 ## Features
@@ -15,7 +15,7 @@ for hashes, passwords, keys, UUIDs and SSH keypairs. Click any value to copy it.
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/foexig/omarchy-crypto.git --enable
+omarchy plugin add https://github.com/foexig/omarchy-sfl.git --enable
 ```
 
 Dependencies (Arch): `sudo pacman -S --needed python-cryptography jq wl-clipboard wtype openssl whois cracklib`
