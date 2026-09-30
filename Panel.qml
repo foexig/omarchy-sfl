@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import Quickshell.Wayland
 import qs.Commons
 import qs.Ui
 
@@ -133,6 +134,71 @@ Panel {
   function cycleMode(step) {
     var i = modes.findIndex(function(o) { return o.value === mode })
     setMode(modes[(i + step + modes.length) % modes.length].value)
+  }
+
+  // Arrow-key focus: jump to the nearest focusable item in that direction
+  function focusables() {
+    var list = []
+    var start = column.nextItemInFocusChain(true)
+    var item = start
+    for (var n = 0; item && n < 400; n++) {
+      if (item.visible && item.enabled && root.inColumn(item) && item.width > 0) list.push(item)
+      item = item.nextItemInFocusChain(true)
+      if (item === start) break
+    }
+    return list
+  }
+
+  function inColumn(item) {
+    for (var p = item; p; p = p.parent) if (p === column) return true
+    return false
+  }
+
+  function moveFocus(dx, dy) {
+    var items = focusables()
+    if (items.length === 0) return false
+    var cur = items.find(function(it) { return it.activeFocus }) || null
+    if (!cur) {
+      var first = dy < 0 || dx < 0 ? items[items.length - 1] : items[0]
+      first.forceActiveFocus()
+      ensureVisible(first)
+      return true
+    }
+    var c = cur.mapToItem(column, cur.width / 2, cur.height / 2)
+    var best = null, bestScore = Infinity
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i]
+      if (it === cur) continue
+      var q = it.mapToItem(column, it.width / 2, it.height / 2)
+      var along = dx !== 0 ? (q.x - c.x) * dx : (q.y - c.y) * dy
+      var across = dx !== 0 ? Math.abs(q.y - c.y) : Math.abs(q.x - c.x)
+      if (along <= 1) continue
+      // Sideways moves stay on the same row
+      if (dx !== 0 && across > Math.max(cur.height, it.height) / 2) continue
+      var score = along + across * 3
+      if (score < bestScore) { bestScore = score; best = it }
+    }
+    if (!best) return false
+    best.forceActiveFocus()
+    ensureVisible(best)
+    return true
+  }
+
+  function ensureVisible(item) {
+    var top = item.mapToItem(column, 0, 0).y
+    var bottom = top + item.height
+    if (top < scroll.contentY) scroll.contentY = Math.max(0, top - Style.space(6))
+    else if (bottom > scroll.contentY + scroll.height)
+      scroll.contentY = Math.min(scroll.contentHeight - scroll.height, bottom - scroll.height + Style.space(6))
+  }
+
+  function handleArrow(event) {
+    if (event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)) return false
+    if (event.key === Qt.Key_Up) return moveFocus(0, -1) || true
+    if (event.key === Qt.Key_Down) return moveFocus(0, 1) || true
+    if (event.key === Qt.Key_Left) return moveFocus(-1, 0) || true
+    if (event.key === Qt.Key_Right) return moveFocus(1, 0) || true
+    return false
   }
 
   function generate() {
@@ -713,6 +779,7 @@ Panel {
     function close(): void { root.close() }
     function toggle(): void { root.toggle() }
     function mode(name: string): void { root.openFromHotkey(); root.setMode(name) }
+    function cycle(step: int): void { if (root.opened) root.cycleMode(step) }
   }
 
   // Text field for the vault forms: Esc backs out, Enter submits
@@ -979,12 +1046,14 @@ Panel {
 
   component VaultButton: Button {
     enabled: !vaultProc.running
+    focusable: true
     foreground: root.bar.foreground
     fontFamily: root.bar.fontFamily
   }
 
   KeyboardPanel {
     id: panel
+    WlrLayershell.namespace: "fabio-crypto"
     anchorItem: root.anchorItem
     owner: root.barIdentity
     bar: root.bar
@@ -1009,9 +1078,11 @@ Panel {
           root.close()
         } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_R) {
           root.generate()
-        } else if (event.key === Qt.Key_Left || event.key === Qt.Key_H) {
+        } else if (root.handleArrow(event)) {
+          // moved focus into the panel
+        } else if (event.key === Qt.Key_H) {
           root.cycleMode(-1)
-        } else if (event.key === Qt.Key_Right || event.key === Qt.Key_L) {
+        } else if (event.key === Qt.Key_L) {
           root.cycleMode(1)
         } else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
           root.switchPanel((event.modifiers & Qt.ShiftModifier) || event.key === Qt.Key_Backtab ? -1 : 1)
@@ -1035,6 +1106,12 @@ Panel {
         id: column
         width: scroll.width
         spacing: Style.space(10)
+
+        // Arrows no child used (buttons, rows, a text cursor at its edge) move focus
+        Keys.onPressed: function(event) {
+          if (root.handleArrow(event)) event.accepted = true
+          else if (event.key === Qt.Key_Escape) { root.vaultEscape(); event.accepted = true }
+        }
 
         // ---- Header
         Item {
@@ -1101,6 +1178,7 @@ Panel {
         Button {
           visible: root.mode !== "hash" && root.mode !== "vault"
           text: "Regenerate"
+          focusable: true
           iconText: String.fromCodePoint(0xF0450) // nf-md-refresh
           bordered: true
           foreground: root.bar.foreground
@@ -1324,7 +1402,13 @@ Panel {
                     width: parent ? parent.width : 0
                     height: Math.max(entryText.implicitHeight, entryActions.implicitHeight) + Style.space(10)
                     radius: Style.cornerRadius
-                    color: entryHover.hovered ? Style.hoverFillFor(root.bar.foreground, Color.accent) : "transparent"
+                    color: entryHover.hovered || activeFocus ? Style.hoverFillFor(root.bar.foreground, Color.accent) : "transparent"
+                    border.width: activeFocus ? 1 : 0
+                    border.color: Color.accent
+                    activeFocusOnTab: true
+                    Keys.onReturnPressed: root.copyEntry(entryRow.modelData, "password")
+                    Keys.onEnterPressed: root.copyEntry(entryRow.modelData, "password")
+                    Keys.onSpacePressed: root.copyEntry(entryRow.modelData, "password")
 
                     HoverHandler { id: entryHover }
 
@@ -1415,7 +1499,11 @@ Panel {
                 width: parent.width
                 height: Style.space(46)
                 radius: Style.cornerRadius
-                color: lockMouse.pressed ? Qt.darker(Color.accent, 1.3) : lockMouse.containsMouse ? Color.accent : "transparent"
+                color: lockMouse.pressed ? Qt.darker(Color.accent, 1.3) : lockMouse.containsMouse || activeFocus ? Color.accent : "transparent"
+                activeFocusOnTab: true
+                Keys.onReturnPressed: root.requestLock()
+                Keys.onEnterPressed: root.requestLock()
+                Keys.onSpacePressed: root.requestLock()
                 border.width: 2
                 border.color: Color.accent
                 scale: lockMouse.pressed ? 0.98 : 1
@@ -1426,7 +1514,7 @@ Panel {
                   anchors.centerIn: parent
                   textFormat: Text.PlainText
                   text: String.fromCodePoint(0xF033E) + "   Lock " + root.vaultName // nf-md-lock
-                  color: lockMouse.containsMouse ? Color.popups.background : Color.accent
+                  color: lockMouse.containsMouse || lockBar.activeFocus ? Color.popups.background : Color.accent
                   font.family: root.bar.fontFamily
                   font.pixelSize: Style.font.title
                   font.bold: true
@@ -1631,7 +1719,13 @@ Panel {
               width: parent ? parent.width : 0
               height: rowColumn.implicitHeight + Style.space(10)
               radius: Style.cornerRadius
-              color: rowHover.hovered ? Style.hoverFillFor(root.bar.foreground, Color.accent) : "transparent"
+              color: rowHover.hovered || activeFocus ? Style.hoverFillFor(root.bar.foreground, Color.accent) : "transparent"
+              border.width: activeFocus ? 1 : 0
+              border.color: Color.accent
+              activeFocusOnTab: true
+              Keys.onReturnPressed: root.copy(row.modelData)
+              Keys.onEnterPressed: root.copy(row.modelData)
+              Keys.onSpacePressed: root.copy(row.modelData)
 
               HoverHandler { id: rowHover }
 
@@ -1672,7 +1766,7 @@ Panel {
                 anchors.rightMargin: Style.space(8)
                 anchors.verticalCenter: parent.verticalCenter
                 readonly property bool copied: root.copiedLabel === row.modelData.label
-                opacity: rowHover.hovered || copied ? 1 : 0
+                opacity: rowHover.hovered || row.activeFocus || copied ? 1 : 0
                 // nf-md-check / nf-md-content_copy
                 text: copied ? String.fromCodePoint(0xF012C) : String.fromCodePoint(0xF018F)
                 color: copied ? Color.accent : root.dim

@@ -36,6 +36,7 @@ for ((i = 0; i < n; i++)); do
     check_window "stopped halfway"
     prev=enter
   else
+    ((i == 0)) || check_window "stopped halfway" # a popup may have stolen focus
     [[ $prev != text ]] || wtype -k Tab
     jq -j --argjson i "$i" '.seq[$i]' <<<"$req" | wtype -d 8 -
     prev=text

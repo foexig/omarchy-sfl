@@ -5,7 +5,8 @@
 # doesn't show up in `ps`). Prints a JSON array of {label, value, secret}.
 set -euo pipefail
 
-emit() { jq -nc --arg l "$1" --arg v "$2" --argjson s "${3:-false}" '{label:$l,value:$v,secret:$s}'; }
+# The value goes through env, not argv: jq's arguments would show secrets in `ps`
+emit() { V=$2 jq -nc --arg l "$1" --argjson s "${3:-false}" '{label:$l,value:$ENV.V,secret:$s}'; }
 digest() { printf %s "$CRYPTO_INPUT" | openssl dgst "-$1" -r | cut -d' ' -f1; }
 
 # n random chars from a tr set; tr gets SIGPIPE when head closes, so
