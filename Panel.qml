@@ -1121,7 +1121,7 @@ Panel {
           Text {
             id: headerText
             anchors.left: parent.left
-            text: "CRYPTO"
+            text: "SFL · SECURE FAST LOGIN"
             color: root.bar.foreground
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.title

@@ -14,8 +14,15 @@
   "barWidget": {
     "displayName": "SFL: Secure Fast Login",
     "description": "Secure Fast Login for Omarchy: encrypted password vault with auto-type, plus hashes, passwords, keys, UUIDs and SSH keypairs, click to copy",
-    "category": "Info",
+    "category": "Productivity",
     "allowMultiple": false,
-    "defaultSection": "right"
-  }
+    "defaultSection": "right",
+    "aliases": [
+      "sfl",
+      "vault",
+      "password",
+      "login"
+    ]
+  },
+  "license": "MIT"
 }
