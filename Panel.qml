@@ -743,7 +743,7 @@ Panel {
     TapHandler { onTapped: root.appendSlot(chip.element) }
     PanelToolTip {
       visible: chip.hot
-      text: "Click to add " + chip.label + " to the " + (root.fillTarget === "signup" ? "sign-up" : "sign-in") + " order (or press 1-" + root.slotCount + " for a specific slot)"
+      text: "Click to add " + chip.label + " to the " + (root.fillTarget === "signup" ? "sign-up" : "sign-in") + " order, or press 1-" + root.slotCount + " to put it in that slot (replaces what's there)"
     }
     Text {
       id: chipText
